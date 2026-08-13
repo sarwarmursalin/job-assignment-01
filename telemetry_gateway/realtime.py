@@ -110,7 +110,7 @@ class RealtimeHub:
             return
         del self._connections[connection.websocket]
         connection.buffer.close()
-        if connection.task is not None:
+        if connection.task is not None and connection.task is not asyncio.current_task():
             connection.task.cancel()
 
     async def _disconnect_and_close(self, connection: _Connection) -> None:
