@@ -79,3 +79,138 @@ def test_repeated_event_from_same_boot_is_a_duplicate() -> None:
         assert len(store.list_events(10)) == 1
     finally:
         store.close()
+
+
+def test_newer_generation_with_lower_sequence_overwrites_current_state() -> None:
+    store = TelemetryStore(":memory:")
+    try:
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-a"))
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-b"))
+
+        store.ingest(
+            telemetry(bootId="boot-a", sequence=50, value=10.0),
+            "2026-08-12T09:00:01+00:00",
+        )
+        result = store.ingest(
+            telemetry(bootId="boot-b", sequence=1, value=20.0),
+            "2026-08-12T09:00:02+00:00",
+        )
+
+        assert result.current_changed is True
+        current = store.list_current_states()[0]
+        assert current.generation == 2
+        assert current.sequence == 1
+        assert current.value == 20.0
+    finally:
+        store.close()
+
+
+def test_same_generation_higher_sequence_overwrites_current_state() -> None:
+    store = TelemetryStore(":memory:")
+    try:
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-a"))
+
+        store.ingest(telemetry(sequence=1, value=10.0), "2026-08-12T09:00:01+00:00")
+        result = store.ingest(telemetry(sequence=2, value=20.0), "2026-08-12T09:00:02+00:00")
+
+        assert result.current_changed is True
+        current = store.list_current_states()[0]
+        assert current.sequence == 2
+        assert current.value == 20.0
+    finally:
+        store.close()
+
+
+def test_same_generation_lower_sequence_does_not_overwrite_current_state() -> None:
+    store = TelemetryStore(":memory:")
+    try:
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-a"))
+
+        store.ingest(telemetry(sequence=5, value=10.0), "2026-08-12T09:00:01+00:00")
+        result = store.ingest(telemetry(sequence=3, value=99.0), "2026-08-12T09:00:02+00:00")
+
+        assert result.current_changed is False
+        current = store.list_current_states()[0]
+        assert current.sequence == 5
+        assert current.value == 10.0
+    finally:
+        store.close()
+
+
+def test_older_generation_with_higher_sequence_does_not_overwrite_current_state() -> None:
+    store = TelemetryStore(":memory:")
+    try:
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-a"))
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-b"))
+
+        store.ingest(
+            telemetry(bootId="boot-b", sequence=1, value=20.0),
+            "2026-08-12T09:00:01+00:00",
+        )
+        result = store.ingest(
+            telemetry(bootId="boot-a", sequence=999, value=99.0),
+            "2026-08-12T09:00:02+00:00",
+        )
+
+        assert result.current_changed is False
+        current = store.list_current_states()[0]
+        assert current.generation == 2
+        assert current.sequence == 1
+        assert current.value == 20.0
+    finally:
+        store.close()
+
+
+def test_earlier_device_time_does_not_block_a_newer_sequence() -> None:
+    store = TelemetryStore(":memory:")
+    try:
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-a"))
+
+        store.ingest(
+            telemetry(sequence=1, deviceTime="2026-08-12T09:10:00+00:00", value=10.0),
+            "2026-08-12T09:00:01+00:00",
+        )
+        result = store.ingest(
+            telemetry(sequence=2, deviceTime="2026-08-12T08:00:00+00:00", value=20.0),
+            "2026-08-12T09:00:02+00:00",
+        )
+
+        assert result.current_changed is True
+        current = store.list_current_states()[0]
+        assert current.sequence == 2
+        assert current.value == 20.0
+    finally:
+        store.close()
+
+
+def test_later_device_time_does_not_override_an_older_generation() -> None:
+    store = TelemetryStore(":memory:")
+    try:
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-a"))
+        store.register_boot(BootRegistrationInput(deviceId="device-01", bootId="boot-b"))
+
+        store.ingest(
+            telemetry(
+                bootId="boot-b",
+                sequence=1,
+                deviceTime="2026-08-12T09:00:00+00:00",
+                value=20.0,
+            ),
+            "2026-08-12T09:00:01+00:00",
+        )
+        result = store.ingest(
+            telemetry(
+                bootId="boot-a",
+                sequence=999,
+                deviceTime="2099-01-01T00:00:00+00:00",
+                value=99.0,
+            ),
+            "2026-08-12T09:00:02+00:00",
+        )
+
+        assert result.current_changed is False
+        current = store.list_current_states()[0]
+        assert current.generation == 2
+        assert current.value == 20.0
+    finally:
+        store.close()
