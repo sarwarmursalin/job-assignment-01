@@ -114,7 +114,15 @@ class RealtimeHub:
             connection.task.cancel()
 
     async def _disconnect_and_close(self, connection: _Connection) -> None:
+        task = connection.task
         self._remove(connection)
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
         try:
             await connection.websocket.close()
         except Exception:
