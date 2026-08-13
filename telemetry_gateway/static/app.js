@@ -11,6 +11,15 @@ function stateKey(state) {
   return `${state.deviceId}:${state.metric}`;
 }
 
+function isNewer(candidate, existing) {
+  if (!candidate) return false;
+  if (!existing) return true;
+  if (candidate.generation !== existing.generation) {
+    return candidate.generation > existing.generation;
+  }
+  return candidate.sequence > existing.sequence;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -61,9 +70,15 @@ async function loadSnapshot() {
   }
 
   const body = await response.json();
-  states.clear();
+  const next = new Map();
   for (const state of body.devices) {
-    states.set(stateKey(state), state);
+    const key = stateKey(state);
+    const current = states.get(key);
+    next.set(key, isNewer(current, state) ? current : state);
+  }
+  states.clear();
+  for (const [key, state] of next) {
+    states.set(key, state);
   }
   render();
 }
@@ -76,6 +91,7 @@ function connect() {
     status.textContent = 'Realtime connected';
     status.className = 'status online';
     setError('');
+    loadSnapshot().catch((error) => setError(error.message));
   });
 
   socket.addEventListener('message', (event) => {
