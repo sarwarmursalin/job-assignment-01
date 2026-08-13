@@ -64,3 +64,59 @@ def test_registers_boot_ingests_and_lists_state(tmp_path) -> None:
         assert devices.status_code == 200
         assert len(devices.json()["devices"]) == 1
         assert devices.json()["devices"][0]["value"] == 21.4
+
+
+def test_websocket_receives_a_message_only_when_state_actually_changes(tmp_path) -> None:
+    app = create_app(
+        str(tmp_path / "gateway.db"),
+        now=lambda: datetime(2026, 8, 12, 9, 0, 1, tzinfo=timezone.utc),
+    )
+    with TestClient(app) as client:
+        client.post("/api/boots", json={"deviceId": "device-01", "bootId": "boot-a"})
+
+        with client.websocket_connect("/ws") as websocket:
+            first = client.post(
+                "/api/telemetry",
+                json={
+                    "deviceId": "device-01",
+                    "bootId": "boot-a",
+                    "sequence": 1,
+                    "deviceTime": "2026-08-12T09:00:00Z",
+                    "metric": "temperature",
+                    "value": 21.4,
+                },
+            )
+            assert first.json()["currentChanged"] is True
+
+            message = websocket.receive_json()
+            assert message["type"] == "device.state.changed"
+            assert message["data"]["value"] == 21.4
+
+            duplicate = client.post(
+                "/api/telemetry",
+                json={
+                    "deviceId": "device-01",
+                    "bootId": "boot-a",
+                    "sequence": 1,
+                    "deviceTime": "2026-08-12T09:00:00Z",
+                    "metric": "temperature",
+                    "value": 21.4,
+                },
+            )
+            assert duplicate.json()["duplicate"] is True
+
+            second = client.post(
+                "/api/telemetry",
+                json={
+                    "deviceId": "device-01",
+                    "bootId": "boot-a",
+                    "sequence": 2,
+                    "deviceTime": "2026-08-12T09:00:02Z",
+                    "metric": "temperature",
+                    "value": 22.5,
+                },
+            )
+            assert second.json()["currentChanged"] is True
+
+            next_message = websocket.receive_json()
+            assert next_message["data"]["value"] == 22.5
